@@ -325,12 +325,12 @@
             </div>
             <div class="modal-body" style="text-align: center; padding: 30px 20px;">
                 <h2 style="color: var(--accent); margin-bottom: 10px;">ProFrame 2D</h2>
-                <p style="margin-bottom: 5px;"><strong>Version:</strong> 1.1.0</p>
-                <p style="margin-bottom: 15px;"><strong>Developer:</strong> Dr. Tahmina Tasnim Nahar & Dr. Md. Motiur Rahman, CE, PUST</p>
+                <p style="margin-bottom: 5px;"><strong>Version:</strong> 1.3.0</p>
+                <p style="margin-bottom: 15px;"><strong>Developer:</strong> AI Assistant</p>
                 <p style="color: var(--text-muted); line-height: 1.5; font-size: 13px;">
                     A professional 2D structural frame analysis tool powered by the Direct Stiffness Method. 
-                    Features include interactive modeling, exact member forces, displacement diagrams, 
-                    dynamic unit conversions, varying distributed loads, and comprehensive detailed member results.
+                    Features include interactive modeling, node internal hinges, point moments, exact member forces, 
+                    displacement diagrams, dynamic unit conversions, and comprehensive detailed member results.
                 </p>
             </div>
             <div class="modal-footer">
@@ -404,8 +404,8 @@ window.addEventListener('resize', () => Canvas.resize());
 
 const app = {
     model: {
-        nodes: [],     // {id, x, y, support: null|'fixed'|'pin'|'roller'}
-        elements: [],  // {id, n1, n2, E, A, I}
+        nodes: [],     // {id, x, y, support: null|'fixed'|'pin'|'roller', hinge: boolean}
+        elements: [],  // {id, n1, n2, E, A, I, release1, release2}
         nodeLoads: [], // {id, nodeId, fx, fy, mz}
         elemLoads: [], // {id, elemId, type: 'dist', w1, w2} - Local y (downward positive)
         nextNodeId: 1,
@@ -413,9 +413,9 @@ const app = {
         nextLoadId: 1
     },
     state: {
-        tool: 'select', // select, node, element, load_point, load_udl, load_vdl
-        selection: { type: null, id: null }, // type: 'node', 'element'
-        view: { tx: 0, ty: 0, zoom: 50 }, // zoom: pixels per unit (meter base)
+        tool: 'select', 
+        selection: { type: null, id: null }, 
+        view: { tx: 0, ty: 0, zoom: 50 }, 
         mouse: { x: 0, y: 0, wx: 0, wy: 0 },
         isPanning: false, panStart: {x: 0, y: 0},
         drawingElementStartNode: null,
@@ -426,7 +426,7 @@ const app = {
     diagramMode: 'none', // none, deflection, afd, sfd, bmd
 
     settings: {
-        unitSystem: 'SI', // 'SI' or 'Imperial'
+        unitSystem: 'SI', 
         showGrid: true,
         snapGrid: true,
         gridSpacing: 1.0,
@@ -497,7 +497,7 @@ const app = {
         this.updateColors();
         Canvas.resize();
         this.bindEvents();
-        this.newModel(true); // create default portal frame
+        this.newModel(true); 
         this.centerView();
         requestAnimationFrame(() => this.render());
     },
@@ -526,17 +526,16 @@ const app = {
 
     // --- Core Model Functions ---
     addNode(x, y, support = null) {
-        // Prevent duplicate nodes at the exact same coordinates
         const duplicate = this.model.nodes.find(n => Math.abs(n.x - x) < 1e-5 && Math.abs(n.y - y) < 1e-5);
         if (duplicate) {
             if (this.settings.warnDuplicateNodes) {
                 this.showToast(`Warning: Node already exists at this location`);
             }
-            return duplicate.id; // Return the existing node ID safely
+            return duplicate.id; 
         }
 
         const id = this.model.nextNodeId++;
-        this.model.nodes.push({ id, x, y, support });
+        this.model.nodes.push({ id, x, y, support, hinge: false });
         return id;
     },
 
@@ -544,7 +543,7 @@ const app = {
         if (n1Id === n2Id) return null;
         if (this.model.elements.find(e => (e.n1 === n1Id && e.n2 === n2Id) || (e.n1 === n2Id && e.n2 === n1Id))) return null;
         const id = this.model.nextElemId++;
-        this.model.elements.push({ id, n1: n1Id, n2: n2Id, E: this.defaults.E, A: this.defaults.A, I: this.defaults.I });
+        this.model.elements.push({ id, n1: n1Id, n2: n2Id, E: this.defaults.E, A: this.defaults.A, I: this.defaults.I, release1: false, release2: false });
         return id;
     },
 
@@ -556,7 +555,7 @@ const app = {
     },
 
     addElemLoad(elemId, w1, w2 = undefined) {
-        if (w2 === undefined) w2 = w1; // Default to UDL if second param omitted
+        if (w2 === undefined) w2 = w1; 
         this.model.elemLoads = this.model.elemLoads.filter(l => l.elemId !== elemId);
         if (w1 !== 0 || w2 !== 0) {
             this.model.elemLoads.push({ id: this.model.nextLoadId++, elemId, type: 'dist', w1, w2 });
@@ -565,7 +564,7 @@ const app = {
 
     getLoadW(load) {
         if (!load) return {w1: 0, w2: 0};
-        if (load.w !== undefined) return {w1: load.w, w2: load.w}; // Legacy JSON support
+        if (load.w !== undefined) return {w1: load.w, w2: load.w}; 
         return {w1: load.w1 || 0, w2: load.w2 || 0};
     },
 
@@ -627,11 +626,11 @@ const app = {
         }
 
         const originalN2Id = el.n2;
+        const originalRelease2 = el.release2;
 
-        // Reconnect original element to the first new node
         el.n2 = newNodes[0];
+        el.release2 = false; 
 
-        // Create the rest of the elements
         for (let i = 0; i < newNodes.length; i++) {
             const currentNewNode = newNodes[i];
             const nextNodeId = (i === newNodes.length - 1) ? originalN2Id : newNodes[i + 1];
@@ -639,6 +638,10 @@ const app = {
             const newElId = this.addElement(currentNewNode, nextNodeId);
             const newEl = this.model.elements.find(e => e.id === newElId);
             newEl.E = el.E; newEl.A = el.A; newEl.I = el.I;
+            
+            if (i === newNodes.length - 1) {
+                newEl.release2 = originalRelease2;
+            }
         }
 
         this.model.elemLoads = this.model.elemLoads.filter(l => l.elemId !== el.id);
@@ -707,20 +710,17 @@ const app = {
     bindEvents() {
         const cvs = Canvas.el;
 
-        // Prevent context menu (right click) to allow it to cancel drawing
         cvs.addEventListener('contextmenu', e => e.preventDefault());
         
         cvs.addEventListener('mousedown', (e) => {
             const rect = cvs.getBoundingClientRect();
             const sx = e.clientX - rect.left; const sy = e.clientY - rect.top;
             
-            // Middle click or Alt+Left for Pan
             if (e.button === 1 || (e.button === 0 && e.altKey)) {
                 this.state.isPanning = true;
                 this.state.panStart = { x: sx - this.state.view.tx, y: sy - this.state.view.ty }; return;
             }
 
-            // Right click cleanly cancels element polyline drawing
             if (e.button === 2) {
                 if (this.state.tool === 'element') {
                     this.state.drawingElementStartNode = null;
@@ -759,7 +759,6 @@ const app = {
                     if (hit && hit.type === 'node') {
                         targetNodeId = hit.id;
                     } else {
-                        // Continuous Polyline Creation - Creating Node in empty space
                         let snapX = w.x; let snapY = w.y;
                         if (this.settings.snapGrid) {
                             const gs = this.settings.gridSpacing;
@@ -769,7 +768,7 @@ const app = {
                             snapY = this.UC.ulen(Math.round(uiY / gs) * gs);
                         }
                         targetNodeId = this.addNode(snapX, snapY);
-                        this.invalidate(); // Immediate visual render
+                        this.invalidate(); 
                     }
 
                     if (!this.state.drawingElementStartNode) {
@@ -779,7 +778,6 @@ const app = {
                             this.addElement(this.state.drawingElementStartNode, targetNodeId);
                             this.invalidate();
                         }
-                        // Chain the next element to the newly targeted node
                         this.state.drawingElementStartNode = targetNodeId; 
                     }
                 }
@@ -885,7 +883,6 @@ const app = {
         const ctx = Canvas.ctx;
         ctx.clearRect(0, 0, Canvas.width, Canvas.height);
         
-        // Draw Grid
         if (this.settings.showGrid) {
             ctx.strokeStyle = this.colors.grid;
             ctx.lineWidth = 1;
@@ -894,7 +891,7 @@ const app = {
             const gs_si = this.UC.ulen(this.settings.gridSpacing);
             const gw = gs_si * this.state.view.zoom;
             
-            if (gw > 5) { // Prevent extreme visual clutter
+            if (gw > 5) { 
                 const originScreen = this.w2s(0, 0);
                 const offsetX = ((originScreen.x % gw) + gw) % gw;
                 const offsetY = ((originScreen.y % gw) + gw) % gw;
@@ -905,17 +902,14 @@ const app = {
             }
         }
 
-        // Draw Diagrams
         if (this.results && this.diagramMode !== 'none' && this.diagramMode !== 'deflection') {
             this.drawDiagrams(ctx);
         }
 
-        // Draw Elements
         for (let el of this.model.elements) {
             const n1 = this.getNode(el.n1); const n2 = this.getNode(el.n2);
             let s1 = this.w2s(n1.x, n1.y); let s2 = this.w2s(n2.x, n2.y);
             
-            // Deflected shape overlay
             if (this.results && this.diagramMode === 'deflection') {
                 const scale = this.settings.deflectionScale; 
                 const d1 = this.results.displacements[n1.id]; const d2 = this.results.displacements[n2.id];
@@ -928,13 +922,24 @@ const app = {
                               (this.state.hover.type === 'element' && this.state.hover.id === el.id) ? '#fff' : this.colors.element;
             ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); ctx.stroke();
 
+            // Draw Element Moment Releases
+            if (el.release1) {
+                ctx.beginPath(); ctx.arc(s1.x, s1.y, 4, 0, Math.PI*2);
+                ctx.fillStyle = this.colors.canvasBg; ctx.fill();
+                ctx.lineWidth = 2; ctx.strokeStyle = this.colors.element; ctx.stroke();
+            }
+            if (el.release2) {
+                ctx.beginPath(); ctx.arc(s2.x, s2.y, 4, 0, Math.PI*2);
+                ctx.fillStyle = this.colors.canvasBg; ctx.fill();
+                ctx.lineWidth = 2; ctx.strokeStyle = this.colors.element; ctx.stroke();
+            }
+
             const uLoad = this.model.elemLoads.find(l => l.elemId === el.id);
             if (uLoad) {
                 const lw = this.getLoadW(uLoad);
                 this.drawDistLoad(ctx, s1, s2, lw.w1, lw.w2);
             }
 
-            // Element Label
             if (this.settings.showElemLabels) {
                 ctx.fillStyle = this.colors.textMuted;
                 ctx.font = "11px Arial";
@@ -944,23 +949,38 @@ const app = {
             }
         }
 
-        // Polyline Drawing Element Hover
         if (this.state.tool === 'element' && this.state.drawingElementStartNode) {
             const sn = this.getNode(this.state.drawingElementStartNode); const s1 = this.w2s(sn.x, sn.y);
             ctx.strokeStyle = this.colors.accent; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
             ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(this.state.mouse.x, this.state.mouse.y); ctx.stroke(); ctx.setLineDash([]);
         }
 
-        // Draw Nodes
         for (let n of this.model.nodes) {
             const s = this.w2s(n.x, n.y);
             if (n.support) this.drawSupport(ctx, s.x, s.y, n.support);
 
-            ctx.fillStyle = (this.state.selection.type === 'node' && this.state.selection.id === n.id) ? this.colors.select : 
-                            (this.state.hover.type === 'node' && this.state.hover.id === n.id) ? '#fff' : this.colors.node;
-            ctx.beginPath(); ctx.arc(s.x, s.y, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath();
+            if (n.hinge) {
+                ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = this.colors.canvasBg;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = (this.state.selection.type === 'node' && this.state.selection.id === n.id) ? this.colors.select : 
+                                  (this.state.hover.type === 'node' && this.state.hover.id === n.id) ? '#fff' : this.colors.node;
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
+                ctx.fillStyle = (this.state.selection.type === 'node' && this.state.selection.id === n.id) ? this.colors.select : 
+                                (this.state.hover.type === 'node' && this.state.hover.id === n.id) ? '#fff' : this.colors.node;
+                ctx.fill();
+            } else {
+                ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
+                ctx.fillStyle = (this.state.selection.type === 'node' && this.state.selection.id === n.id) ? this.colors.select : 
+                                (this.state.hover.type === 'node' && this.state.hover.id === n.id) ? '#fff' : this.colors.node;
+                ctx.fill();
+            }
 
-            // Node Label
             if (this.settings.showNodeLabels) {
                 ctx.fillStyle = this.colors.textLight;
                 ctx.font = "11px Arial";
@@ -968,14 +988,15 @@ const app = {
             }
 
             const nLoad = this.model.nodeLoads.find(l => l.nodeId === n.id);
-            if (nLoad) this.drawArrow(ctx, s.x, s.y, nLoad.fx, nLoad.fy);
+            if (nLoad) {
+                this.drawArrow(ctx, s.x, s.y, nLoad.fx, nLoad.fy);
+                this.drawNodeMomentLoad(ctx, s.x, s.y, nLoad.mz);
+            }
 
             if (this.results && n.support && this.diagramMode !== 'none') {
                 const r = this.results.reactions[n.id];
                 if (r) {
-                    ctx.fillStyle = '#fcc419'; ctx.font = "11px Arial";
-                    const txt = `Rx:${this.UC.force(r.fx).toFixed(1)} Ry:${this.UC.force(r.fy).toFixed(1)}`;
-                    ctx.fillText(txt, s.x + 10, s.y + 15);
+                    this.drawReaction(ctx, s.x, s.y, r.fx, r.fy, r.mz);
                 }
             }
         }
@@ -1012,6 +1033,66 @@ const app = {
         ctx.fillText(`${this.UC.force(mag).toFixed(1)} ${this.UC.lForce}`, tailX, tailY - 5);
     },
 
+    drawNodeMomentLoad(ctx, x, y, mz) {
+        if (!mz || Math.abs(mz) < 0.001) return;
+        const r = 20; const isCCW = mz > 0;
+        ctx.strokeStyle = this.colors.load; ctx.fillStyle = this.colors.load; ctx.lineWidth = 2;
+        
+        ctx.beginPath(); ctx.arc(x, y, r, Math.PI * 0.2, Math.PI * 1.8, false); ctx.stroke();
+        
+        const head = 8;
+        const arrowAngle = isCCW ? Math.PI * 0.2 : Math.PI * 1.8;
+        const arrowX = x + r * Math.cos(arrowAngle); const arrowY = y + r * Math.sin(arrowAngle);
+        const tangent = arrowAngle + (isCCW ? -Math.PI/2 : Math.PI/2);
+        
+        ctx.beginPath(); ctx.moveTo(arrowX, arrowY);
+        ctx.lineTo(arrowX - head * Math.cos(tangent - Math.PI/6), arrowY - head * Math.sin(tangent - Math.PI/6));
+        ctx.lineTo(arrowX - head * Math.cos(tangent + Math.PI/6), arrowY - head * Math.sin(tangent + Math.PI/6)); ctx.fill();
+        
+        ctx.font = "11px Arial";
+        ctx.fillText(`${this.UC.mom(Math.abs(mz)).toFixed(1)} ${this.UC.lMom}`, x + r + 5, y + 5);
+    },
+
+    drawReaction(ctx, x, y, rx, ry, mz) {
+        const color = '#fcc419'; 
+        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+        const len = 35; const head = 8; ctx.font = "11px Arial";
+
+        if (Math.abs(rx) > 0.1) {
+            const dirX = rx > 0 ? 1 : -1;
+            const tailX = x - dirX * len;
+            ctx.beginPath(); ctx.moveTo(tailX, y); ctx.lineTo(x, y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x, y); 
+            ctx.lineTo(x - dirX*head, y - head/2); ctx.lineTo(x - dirX*head, y + head/2); ctx.fill();
+            const txt = `Rx: ${this.UC.force(Math.abs(rx)).toFixed(1)}`;
+            ctx.fillText(txt, tailX + (dirX > 0 ? -ctx.measureText(txt).width - 5 : 5), y + 4);
+        }
+
+        if (Math.abs(ry) > 0.1) {
+            const dirY = ry > 0 ? -1 : 1; 
+            const tailY = y - dirY * len; 
+            ctx.beginPath(); ctx.moveTo(x, tailY); ctx.lineTo(x, y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x, y); 
+            ctx.lineTo(x - head/2, y - dirY*head); ctx.lineTo(x + head/2, y - dirY*head); ctx.fill();
+            ctx.fillText(`Ry: ${this.UC.force(Math.abs(ry)).toFixed(1)}`, x + 5, tailY + (dirY > 0 ? 12 : -5));
+        }
+
+        if (mz !== undefined && Math.abs(mz) > 0.1) {
+            const r = 25; const isCCW = mz > 0;
+            ctx.beginPath(); ctx.arc(x, y, r, Math.PI * 1.2, Math.PI * 1.8, false); ctx.stroke();
+            
+            const arrowAngle = isCCW ? Math.PI * 1.2 : Math.PI * 1.8;
+            const arrowX = x + r * Math.cos(arrowAngle); const arrowY = y + r * Math.sin(arrowAngle);
+            const tangent = arrowAngle + (isCCW ? -Math.PI/2 : Math.PI/2);
+            
+            ctx.beginPath(); ctx.moveTo(arrowX, arrowY);
+            ctx.lineTo(arrowX - head * Math.cos(tangent - Math.PI/6), arrowY - head * Math.sin(tangent - Math.PI/6));
+            ctx.lineTo(arrowX - head * Math.cos(tangent + Math.PI/6), arrowY - head * Math.sin(tangent + Math.PI/6)); ctx.fill();
+            
+            ctx.fillText(`Mz: ${this.UC.mom(Math.abs(mz)).toFixed(1)}`, x + r - 10, y - r - 5);
+        }
+    },
+
     drawDistLoad(ctx, s1, s2, w1, w2) {
         ctx.strokeStyle = this.colors.load; ctx.fillStyle = this.colors.load; ctx.lineWidth = 1;
 
@@ -1022,9 +1103,8 @@ const app = {
         const maxW = Math.max(Math.abs(w1), Math.abs(w2));
         if (maxW === 0) return;
         
-        const sf = 20 / maxW; // max height is 20 visual pixels
-        const h1 = w1 * sf;
-        const h2 = w2 * sf;
+        const sf = 20 / maxW; 
+        const h1 = w1 * sf; const h2 = w2 * sf;
 
         ctx.beginPath(); ctx.moveTo(s1.x + nx*h1, s1.y + ny*h1); ctx.lineTo(s2.x + nx*h2, s2.y + ny*h2); ctx.stroke();
 
@@ -1036,9 +1116,8 @@ const app = {
             
             ctx.beginPath(); ctx.moveTo(px + nx*hw, py + ny*hw); ctx.lineTo(px, py); ctx.stroke();
             
-            // Arrowhead logic based on load sign
             const sign = hw >= 0 ? 1 : -1;
-            if (Math.abs(hw) > 4) { // Don't crowd small arrowheads
+            if (Math.abs(hw) > 4) { 
                 ctx.beginPath(); ctx.moveTo(px, py); 
                 ctx.lineTo(px + nx*4*sign + ux*3, py + ny*4*sign + uy*3); 
                 ctx.lineTo(px + nx*4*sign - ux*3, py + ny*4*sign - uy*3); 
@@ -1046,9 +1125,7 @@ const app = {
             }
         }
         ctx.font = "12px Arial";
-        const text = (Math.abs(w1 - w2) < 0.001) 
-            ? `${this.UC.udl(w1).toFixed(1)} ${this.UC.lUdl}` 
-            : `${this.UC.udl(w1).toFixed(1)} - ${this.UC.udl(w2).toFixed(1)} ${this.UC.lUdl}`;
+        const text = (Math.abs(w1 - w2) < 0.001) ? `${this.UC.udl(w1).toFixed(1)} ${this.UC.lUdl}` : `${this.UC.udl(w1).toFixed(1)} - ${this.UC.udl(w2).toFixed(1)} ${this.UC.lUdl}`;
         const midH = (h1 + h2) / 2;
         ctx.fillText(text, s1.x + dx/2 + nx*midH + nx*10, s1.y + dy/2 + ny*midH + ny*10);
     },
@@ -1084,7 +1161,7 @@ const app = {
             
             const dx = s2.x - s1.x; const dy = s2.y - s1.y;
             const len = Math.sqrt(dx*dx + dy*dy); const ux = dx / len; const uy = dy / len;
-            const nx = -uy; const ny = ux;
+            const nx = uy; const ny = -ux; // Inverted drawing to render SFD and BMD "up"
 
             let v1, v2, color;
 
@@ -1101,10 +1178,9 @@ const app = {
                 for(let i=0; i<=steps; i++) {
                     const t = i/steps; const L = Math.sqrt(Math.pow(n2.x-n1.x,2) + Math.pow(n2.y-n1.y,2));
                     const xLocal = t * L;
-                    
                     const M_x = -f.M1 + f.V1 * xLocal - (lw.w1 * xLocal * xLocal / 2) - ((lw.w2 - lw.w1) * Math.pow(xLocal, 3) / (6 * L));
                     const val = M_x * scale; 
-                    ctx.lineTo(s1.x + ux * (len * t) + nx * val, s1.y + uy * (len * t) + ny * val);
+                    ctx.lineTo(s1.x + nx * val, s1.y + ny * val); // Standard positive M plots up
                 }
                 ctx.lineTo(s2.x, s2.y); ctx.fill(); ctx.stroke();
             } else {
@@ -1165,6 +1241,10 @@ const app = {
                             <option value="roller" ${n.support==='roller'?'selected':''}>Roller</option>
                         </select>
                     </div>
+                    <div class="prop-row" style="margin-top:5px;">
+                        <span class="prop-label">Internal Hinge</span>
+                        <input type="checkbox" class="prop-val" id="p-nhinge" ${n.hinge ? 'checked' : ''} style="width: auto;">
+                    </div>
                 </div>
                 <div class="prop-group">
                     <div style="font-weight:bold; margin-bottom:10px; font-size:11px; color:var(--text-muted)">POINT LOAD</div>
@@ -1201,6 +1281,10 @@ const app = {
                 n.y = newY; this.invalidate(); 
             });
             document.getElementById('p-nsup').addEventListener('change', e => { n.support = e.target.value === 'none' ? null : e.target.value; this.invalidate(); });
+            
+            const hingeEl = document.getElementById('p-nhinge');
+            if (hingeEl) hingeEl.addEventListener('change', e => { n.hinge = e.target.checked; this.invalidate(); });
+
             ['p-nfx', 'p-nfy', 'p-nmz'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => {
                     const fx = UC.uforce(parseFloat(document.getElementById('p-nfx').value || 0));
@@ -1227,6 +1311,11 @@ const app = {
                     <div class="prop-row"><span class="prop-label">E (${UC.lE})</span><input type="number" class="prop-val" id="p-ee" value="${UC.eMod(el.E).toFixed(0)}"></div>
                     <div class="prop-row"><span class="prop-label">A (${UC.lArea})</span><input type="number" step="0.001" class="prop-val" id="p-ea" value="${UC.area(el.A).toFixed(4)}"></div>
                     <div class="prop-row"><span class="prop-label">I (${UC.lInertia})</span><input type="number" step="0.0001" class="prop-val" id="p-ei" value="${UC.inertia(el.I).toFixed(6)}"></div>
+                </div>
+                <div class="prop-group">
+                    <div style="font-weight:bold; margin-bottom:10px; font-size:11px; color:var(--text-muted)">MEMBER RELEASES</div>
+                    <div class="prop-row"><span class="prop-label">Hinge Start (N1)</span><input type="checkbox" class="prop-val" id="p-rel1" ${el.release1 ? 'checked' : ''}></div>
+                    <div class="prop-row"><span class="prop-label">Hinge End (N2)</span><input type="checkbox" class="prop-val" id="p-rel2" ${el.release2 ? 'checked' : ''}></div>
                 </div>
                 <div class="prop-group">
                     <div style="font-weight:bold; margin-bottom:10px; font-size:11px; color:var(--text-muted)">DISTRIBUTED LOAD (Local Y)</div>
@@ -1263,6 +1352,8 @@ const app = {
             document.getElementById('p-ee').addEventListener('change', e => { el.E = UC.ueMod(parseFloat(e.target.value)); this.invalidate(); });
             document.getElementById('p-ea').addEventListener('change', e => { el.A = UC.uarea(parseFloat(e.target.value)); this.invalidate(); });
             document.getElementById('p-ei').addEventListener('change', e => { el.I = UC.uinertia(parseFloat(e.target.value)); this.invalidate(); });
+            document.getElementById('p-rel1').addEventListener('change', e => { el.release1 = e.target.checked; this.invalidate(); });
+            document.getElementById('p-rel2').addEventListener('change', e => { el.release2 = e.target.checked; this.invalidate(); });
             
             const loadChangeHandler = () => {
                 const nw1 = UC.uudl(parseFloat(document.getElementById('p-ew1').value || 0));
@@ -1300,8 +1391,11 @@ const app = {
                 const dx = n2.x - n1.x; const dy = n2.y - n1.y;
                 const L = Math.sqrt(dx*dx + dy*dy); const c = dx / L; const s = dy / L;
                 const E = el.E, A = el.A, I = el.I;
+                
+                const isRel1 = el.release1 || n1.hinge;
+                const isRel2 = el.release2 || n2.hinge;
 
-                const k = [
+                let k = [
                     [ A*E/L, 0, 0, -A*E/L, 0, 0 ],
                     [ 0, 12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2), 0, -12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2) ],
                     [ 0, 6*E*I/Math.pow(L,2), 4*E*I/L, 0, -6*E*I/Math.pow(L,2), 2*E*I/L ],
@@ -1309,6 +1403,49 @@ const app = {
                     [ 0, -12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2), 0, 12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2) ],
                     [ 0, 6*E*I/Math.pow(L,2), 2*E*I/L, 0, -6*E*I/Math.pow(L,2), 4*E*I/L ]
                 ];
+                
+                let f_fixed_local = [0, 0, 0, 0, 0, 0];
+                const load = this.model.elemLoads.find(l => l.elemId === el.id);
+                if (load) {
+                    const lw = this.getLoadW(load);
+                    if (lw.w1 !== 0 || lw.w2 !== 0) {
+                        const w_uni = lw.w1;
+                        const w_tri = lw.w2 - lw.w1;
+                        f_fixed_local[1] = w_uni * L / 2 + 3/20 * w_tri * L;
+                        f_fixed_local[2] = w_uni * L * L / 12 + w_tri * L * L / 30;
+                        f_fixed_local[4] = w_uni * L / 2 + 7/20 * w_tri * L;
+                        f_fixed_local[5] = -w_uni * L * L / 12 - w_tri * L * L / 20;
+                    }
+                }
+
+                // Apply Static Condensation for member hinges
+                if (isRel1) {
+                    const k33 = k[2][2];
+                    if (k33 !== 0) {
+                        for (let i=0; i<6; i++) f_fixed_local[i] -= k[i][2] * (f_fixed_local[2] / k33);
+                        const k_new = k.map(row => [...row]);
+                        for (let i=0; i<6; i++) {
+                            for (let j=0; j<6; j++) {
+                                k_new[i][j] = k[i][j] - k[i][2] * k[2][j] / k33;
+                            }
+                        }
+                        k = k_new;
+                    }
+                }
+                if (isRel2) {
+                    const k66 = k[5][5];
+                    if (k66 !== 0) {
+                        for (let i=0; i<6; i++) f_fixed_local[i] -= k[i][5] * (f_fixed_local[5] / k66);
+                        const k_new = k.map(row => [...row]);
+                        for (let i=0; i<6; i++) {
+                            for (let j=0; j<6; j++) {
+                                k_new[i][j] = k[i][j] - k[i][5] * k[5][j] / k66;
+                            }
+                        }
+                        k = k_new;
+                    }
+                }
+
                 const T = [[ c, s, 0, 0, 0, 0 ], [-s, c, 0, 0, 0, 0 ], [ 0, 0, 1, 0, 0, 0 ], [ 0, 0, 0, c, s, 0 ], [ 0, 0, 0,-s, c, 0 ], [ 0, 0, 0, 0, 0, 1 ]];
                 const T_t = math.transpose(T);
                 const k_g = math.multiply(math.multiply(T_t, k), T);
@@ -1316,23 +1453,8 @@ const app = {
 
                 for(let i=0; i<6; i++) for(let j=0; j<6; j++) K[map[i]][map[j]] += k_g[i][j];
 
-                const load = this.model.elemLoads.find(l => l.elemId === el.id);
-                if (load) {
-                    const lw = this.getLoadW(load);
-                    if (lw.w1 !== 0 || lw.w2 !== 0) {
-                        const w_uni = lw.w1;
-                        const w_tri = lw.w2 - lw.w1;
-                        
-                        const Fy1 = w_uni * L / 2 + 3/20 * w_tri * L;
-                        const M1 = w_uni * L * L / 12 + w_tri * L * L / 30;
-                        const Fy2 = w_uni * L / 2 + 7/20 * w_tri * L;
-                        const M2 = -w_uni * L * L / 12 - w_tri * L * L / 20;
-
-                        const f_fixed_local = [ 0, Fy1, M1, 0, Fy2, M2 ];
-                        const f_eq_global = math.multiply(T_t, f_fixed_local).map(v => -v);
-                        for(let i=0; i<6; i++) F[map[i]] += f_eq_global[i];
-                    }
-                }
+                const f_eq_global = math.multiply(T_t, f_fixed_local).map(v => -v);
+                for(let i=0; i<6; i++) F[map[i]] += f_eq_global[i];
             });
 
             this.model.nodeLoads.forEach(l => { const idx = nodeIdx[l.nodeId] * 3; F[idx] += l.fx; F[idx+1] += l.fy; F[idx+2] += l.mz; });
@@ -1354,6 +1476,17 @@ const app = {
                 K[dof][dof] = 1; F[dof] = 0;
             });
 
+            // Prevent singular matrices from completely isolated/hinged rotational DOFs
+            for (let i = 0; i < DOFs; i++) {
+                if (Math.abs(K[i][i]) < 1e-10) {
+                    K[i][i] = 1;
+                    F[i] = 0;
+                    for (let j = 0; j < DOFs; j++) {
+                        if (i !== j) { K[i][j] = 0; K[j][i] = 0; }
+                    }
+                }
+            }
+
             const U = math.lusolve(K, F).map(row => row[0]);
             const res = { displacements: {}, reactions: {}, memberForces: {}, K: K_full };
 
@@ -1370,26 +1503,60 @@ const app = {
                 const dx = n2.x - n1.x; const dy = n2.y - n1.y;
                 const L = Math.sqrt(dx*dx + dy*dy); const c = dx / L; const s = dy / L;
                 const E = el.E, A = el.A, I = el.I;
+                
+                const isRel1 = el.release1 || n1.hinge;
+                const isRel2 = el.release2 || n2.hinge;
 
-                const T = [[ c, s, 0, 0, 0, 0 ], [-s, c, 0, 0, 0, 0 ], [ 0, 0, 1, 0, 0, 0 ], [ 0, 0, 0, c, s, 0 ], [ 0, 0, 0,-s, c, 0 ], [ 0, 0, 0, 0, 0, 1 ]];
-                const k = [[ A*E/L, 0, 0, -A*E/L, 0, 0 ], [ 0, 12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2), 0, -12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2) ], [ 0, 6*E*I/Math.pow(L,2), 4*E*I/L, 0, -6*E*I/Math.pow(L,2), 2*E*I/L ], [ -A*E/L, 0, 0, A*E/L, 0, 0 ], [ 0, -12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2), 0, 12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2) ], [ 0, 6*E*I/Math.pow(L,2), 2*E*I/L, 0, -6*E*I/Math.pow(L,2), 4*E*I/L ]];
-
-                const u_local = math.multiply(T, u_global);
-                let f_local = math.multiply(k, u_local);
-
+                let k = [
+                    [ A*E/L, 0, 0, -A*E/L, 0, 0 ],
+                    [ 0, 12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2), 0, -12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2) ],
+                    [ 0, 6*E*I/Math.pow(L,2), 4*E*I/L, 0, -6*E*I/Math.pow(L,2), 2*E*I/L ],
+                    [ -A*E/L, 0, 0, A*E/L, 0, 0 ],
+                    [ 0, -12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2), 0, 12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2) ],
+                    [ 0, 6*E*I/Math.pow(L,2), 2*E*I/L, 0, -6*E*I/Math.pow(L,2), 4*E*I/L ]
+                ];
+                
+                let f_fixed_local = [0, 0, 0, 0, 0, 0];
                 const load = this.model.elemLoads.find(l => l.elemId === el.id);
                 if (load) {
                     const lw = this.getLoadW(load);
                     if (lw.w1 !== 0 || lw.w2 !== 0) {
                         const w_uni = lw.w1; const w_tri = lw.w2 - lw.w1;
-                        const Fy1 = w_uni * L / 2 + 3/20 * w_tri * L;
-                        const M1 = w_uni * L * L / 12 + w_tri * L * L / 30;
-                        const Fy2 = w_uni * L / 2 + 7/20 * w_tri * L;
-                        const M2 = -w_uni * L * L / 12 - w_tri * L * L / 20;
-                        const f_fixed_local = [ 0, Fy1, M1, 0, Fy2, M2 ];
-                        f_local = math.add(f_local, f_fixed_local);
+                        f_fixed_local[1] = w_uni * L / 2 + 3/20 * w_tri * L;
+                        f_fixed_local[2] = w_uni * L * L / 12 + w_tri * L * L / 30;
+                        f_fixed_local[4] = w_uni * L / 2 + 7/20 * w_tri * L;
+                        f_fixed_local[5] = -w_uni * L * L / 12 - w_tri * L * L / 20;
                     }
                 }
+
+                if (isRel1) {
+                    const k33 = k[2][2];
+                    if (k33 !== 0) {
+                        for (let i=0; i<6; i++) f_fixed_local[i] -= k[i][2] * (f_fixed_local[2] / k33);
+                        const k_new = k.map(row => [...row]);
+                        for (let i=0; i<6; i++) {
+                            for (let j=0; j<6; j++) { k_new[i][j] = k[i][j] - k[i][2] * k[2][j] / k33; }
+                        }
+                        k = k_new;
+                    }
+                }
+                if (isRel2) {
+                    const k66 = k[5][5];
+                    if (k66 !== 0) {
+                        for (let i=0; i<6; i++) f_fixed_local[i] -= k[i][5] * (f_fixed_local[5] / k66);
+                        const k_new = k.map(row => [...row]);
+                        for (let i=0; i<6; i++) {
+                            for (let j=0; j<6; j++) { k_new[i][j] = k[i][j] - k[i][5] * k[5][j] / k66; }
+                        }
+                        k = k_new;
+                    }
+                }
+
+                const T = [[ c, s, 0, 0, 0, 0 ], [-s, c, 0, 0, 0, 0 ], [ 0, 0, 1, 0, 0, 0 ], [ 0, 0, 0, c, s, 0 ], [ 0, 0, 0,-s, c, 0 ], [ 0, 0, 0, 0, 0, 1 ]];
+                const u_local = math.multiply(T, u_global);
+                
+                let f_local = math.multiply(k, u_local);
+                f_local = math.add(f_local, f_fixed_local);
 
                 res.memberForces[el.id] = { N1: f_local[0], V1: f_local[1], M1: f_local[2], N2: f_local[3], V2: f_local[4], M2: f_local[5] };
 
@@ -1508,7 +1675,42 @@ const app = {
         const c = (n2.x - n1.x) / L; const s = (n2.y - n1.y) / L;
         const T = [[c,s,0,0,0,0],[-s,c,0,0,0,0],[0,0,1,0,0,0],[0,0,0,c,s,0],[0,0,0,-s,c,0],[0,0,0,0,0,1]];
         const u_local = math.multiply(T, u_global);
-        const v1 = u_local[1]; const th1 = u_local[2]; const v2 = u_local[4]; const th2 = u_local[5];
+        
+        // Recover internal beam rotation due to hinges for exact shape function overlay
+        let beam_u = [...u_local];
+        const isRel1 = el.release1 || n1.hinge;
+        const isRel2 = el.release2 || n2.hinge;
+
+        if (isRel1 || isRel2) {
+            const E = el.E; const A = el.A; const I = el.I;
+            const k_orig = [
+                [ A*E/L, 0, 0, -A*E/L, 0, 0 ],
+                [ 0, 12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2), 0, -12*E*I/Math.pow(L,3), 6*E*I/Math.pow(L,2) ],
+                [ 0, 6*E*I/Math.pow(L,2), 4*E*I/L, 0, -6*E*I/Math.pow(L,2), 2*E*I/L ],
+                [ -A*E/L, 0, 0, A*E/L, 0, 0 ],
+                [ 0, -12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2), 0, 12*E*I/Math.pow(L,3), -6*E*I/Math.pow(L,2) ],
+                [ 0, 6*E*I/Math.pow(L,2), 2*E*I/L, 0, -6*E*I/Math.pow(L,2), 4*E*I/L ]
+            ];
+            let f_orig = [0, 0, 0, 0, 0, 0];
+            if (w1 !== 0 || w2 !== 0) {
+                const w_tri = w2 - w1;
+                f_orig[1] = w1 * L / 2 + 3/20 * w_tri * L; f_orig[2] = w1 * L * L / 12 + w_tri * L * L / 30;
+                f_orig[4] = w1 * L / 2 + 7/20 * w_tri * L; f_orig[5] = -w1 * L * L / 12 - w_tri * L * L / 20;
+            }
+            if (isRel1 && isRel2) {
+                const RHS1 = -f_orig[2] - (k_orig[2][0]*beam_u[0] + k_orig[2][1]*beam_u[1] + k_orig[2][3]*beam_u[3] + k_orig[2][4]*beam_u[4]);
+                const RHS2 = -f_orig[5] - (k_orig[5][0]*beam_u[0] + k_orig[5][1]*beam_u[1] + k_orig[5][3]*beam_u[3] + k_orig[5][4]*beam_u[4]);
+                const det = k_orig[2][2]*k_orig[5][5] - k_orig[2][5]*k_orig[5][2];
+                beam_u[2] = (RHS1*k_orig[5][5] - RHS2*k_orig[2][5]) / det;
+                beam_u[5] = (k_orig[2][2]*RHS2 - k_orig[5][2]*RHS1) / det;
+            } else if (isRel1) {
+                beam_u[2] = (-f_orig[2] - (k_orig[2][0]*beam_u[0] + k_orig[2][1]*beam_u[1] + k_orig[2][3]*beam_u[3] + k_orig[2][4]*beam_u[4] + k_orig[2][5]*beam_u[5])) / k_orig[2][2];
+            } else if (isRel2) {
+                beam_u[5] = (-f_orig[5] - (k_orig[5][0]*beam_u[0] + k_orig[5][1]*beam_u[1] + k_orig[5][2]*beam_u[2] + k_orig[5][3]*beam_u[3] + k_orig[5][4]*beam_u[4])) / k_orig[5][5];
+            }
+        }
+
+        const v1 = beam_u[1]; const th1 = beam_u[2]; const v2 = beam_u[4]; const th2 = beam_u[5];
 
         let tbody = '';
         const pts = [];
@@ -1516,12 +1718,11 @@ const app = {
         for (let i = 0; i <= safeSegs; i++) {
             const x = (i / safeSegs) * L;
             
-            // Core structural physics for cross sections under VDL
-            const Nx = -f.N1; // Axial tension positive convention
+            // Core structural physics for cross sections under VDL (valid with hinges as f is exact)
+            const Nx = -f.N1; 
             const Vx = f.V1 - (w1 * x + (w2 - w1) * x * x / (2 * L));
             const Mx = -f.M1 + f.V1 * x - (w1 * x * x / 2) - ((w2 - w1) * Math.pow(x, 3) / (6 * L));
 
-            // Shape Functions for exact Deflection with analytical Particular Solution
             const xi = x/L;
             const N1_s = 1 - 3*xi*xi + 2*xi*xi*xi;
             const N2_s = x * (1 - xi)*(1 - xi);
@@ -1565,14 +1766,15 @@ const app = {
             ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 2;
             pts.forEach((p, i) => {
                 const cx = pad + (p.x / L) * chartW;
+                // Negative plots UP (canvas logic), so getter returning positive naturally plots "Up" relative to beam
                 const cy = cvs.height/2 - (getter(p) / maxAbs) * (chartH/2);
                 if (i===0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
             });
             ctx.stroke();
         };
 
-        drawMetric(p => -p.Mx, this.colors.bmd); // Negative moment drawn on tension side conceptually
-        drawMetric(p => p.Vx, this.colors.sfd);
+        drawMetric(p => p.Mx, this.colors.bmd); // Positive moment plots UP
+        drawMetric(p => p.Vx, this.colors.sfd); // Positive shear plots UP
         
         // Simple Chart Legend
         ctx.font = "11px Arial";
@@ -1730,17 +1932,20 @@ const app = {
             
             <h3>2. Nodal Geometry & Supports</h3>
             <table class="print-table">
-                <tr><th>Node</th><th>$X$ (${UC.lLen})</th><th>$Y$ (${UC.lLen})</th><th>Support Condition</th></tr>
-                ${this.model.nodes.map(n => `<tr><td>$N_{${n.id}}$</td><td>${UC.len(n.x).toFixed(3)}</td><td>${UC.len(n.y).toFixed(3)}</td><td>${n.support ? n.support.toUpperCase() : 'Free'}</td></tr>`).join('')}
+                <tr><th>Node</th><th>$X$ (${UC.lLen})</th><th>$Y$ (${UC.lLen})</th><th>Support Condition</th><th>Hinged</th></tr>
+                ${this.model.nodes.map(n => `<tr><td>$N_{${n.id}}$</td><td>${UC.len(n.x).toFixed(3)}</td><td>${UC.len(n.y).toFixed(3)}</td><td>${n.support ? n.support.toUpperCase() : 'Free'}</td><td>${n.hinge ? 'Yes' : 'No'}</td></tr>`).join('')}
             </table>
             
             <h3>3. Element Properties</h3>
             <table class="print-table">
-                <tr><th>Element</th><th>Start Node</th><th>End Node</th><th>$E$ (${UC.lE})</th><th>$A$ (${UC.lArea})</th><th>$I$ (${UC.lInertia})</th><th>$L$ (${UC.lLen})</th></tr>
+                <tr><th>Element</th><th>Start Node</th><th>End Node</th><th>$E$ (${UC.lE})</th><th>$A$ (${UC.lArea})</th><th>$I$ (${UC.lInertia})</th><th>$L$ (${UC.lLen})</th><th>Releases</th></tr>
                 ${this.model.elements.map(el => {
                     const n1 = this.getNode(el.n1); const n2 = this.getNode(el.n2);
                     const L = Math.sqrt(Math.pow(n2.x-n1.x,2) + Math.pow(n2.y-n1.y,2));
-                    return `<tr><td>$E_{${el.id}}$</td><td>$N_{${el.n1}}$</td><td>$N_{${el.n2}}$</td><td>${UC.eMod(el.E).toFixed(2)}</td><td>${UC.area(el.A).toFixed(5)}</td><td>${UC.inertia(el.I).toFixed(6)}</td><td>${UC.len(L).toFixed(3)}</td></tr>`;
+                    let releases = [];
+                    if (el.release1) releases.push("Start");
+                    if (el.release2) releases.push("End");
+                    return `<tr><td>$E_{${el.id}}$</td><td>$N_{${el.n1}}$</td><td>$N_{${el.n2}}$</td><td>${UC.eMod(el.E).toFixed(2)}</td><td>${UC.area(el.A).toFixed(5)}</td><td>${UC.inertia(el.I).toFixed(6)}</td><td>${UC.len(L).toFixed(3)}</td><td>${releases.length > 0 ? releases.join(', ') : 'None'}</td></tr>`;
                 }).join('')}
             </table>
             
