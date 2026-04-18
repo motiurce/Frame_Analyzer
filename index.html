@@ -308,6 +308,18 @@
                     <label>Deflection Scale Factor</label>
                     <input type="number" step="1" min="1" class="form-control" id="set-defscale">
                 </div>
+                <div class="form-group">
+                    <label>AFD Scale Multiplier</label>
+                    <input type="number" step="0.1" min="0.1" class="form-control" id="set-afdscale">
+                </div>
+                <div class="form-group">
+                    <label>SFD Scale Multiplier</label>
+                    <input type="number" step="0.1" min="0.1" class="form-control" id="set-sfdscale">
+                </div>
+                <div class="form-group">
+                    <label>BMD Scale Multiplier</label>
+                    <input type="number" step="0.1" min="0.1" class="form-control" id="set-bmdscale">
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="action-btn" style="width: auto; background: transparent;" onclick="app.closeModals()">Cancel</button>
@@ -325,12 +337,12 @@
             </div>
             <div class="modal-body" style="text-align: center; padding: 30px 20px;">
                 <h2 style="color: var(--accent); margin-bottom: 10px;">ProFrame 2D</h2>
-                <p style="margin-bottom: 5px;"><strong>Version:</strong> 1.3.0</p>
+                <p style="margin-bottom: 5px;"><strong>Version:</strong> 1.4.0</p>
                 <p style="margin-bottom: 15px;"><strong>Developer:</strong> AI Assistant</p>
                 <p style="color: var(--text-muted); line-height: 1.5; font-size: 13px;">
                     A professional 2D structural frame analysis tool powered by the Direct Stiffness Method. 
                     Features include interactive modeling, node internal hinges, point moments, exact member forces, 
-                    displacement diagrams, dynamic unit conversions, and comprehensive detailed member results.
+                    smooth higher-degree displacement diagrams, dynamic unit conversions, and comprehensive detailed member results.
                 </p>
             </div>
             <div class="modal-footer">
@@ -434,7 +446,10 @@ const app = {
         showNodeLabels: true,
         showElemLabels: true,
         warnDuplicateNodes: true,
-        deflectionScale: 50
+        deflectionScale: 50,
+        afdScale: 1.0,
+        sfdScale: 1.0,
+        bmdScale: 1.0
     },
     
     colors: {},
@@ -1151,7 +1166,11 @@ const app = {
             }
         });
 
-        const scale = 50 / maxVal; 
+        let userScale = 1.0;
+        if(this.diagramMode === 'afd') userScale = this.settings.afdScale || 1.0;
+        if(this.diagramMode === 'sfd') userScale = this.settings.sfdScale || 1.0;
+        if(this.diagramMode === 'bmd') userScale = this.settings.bmdScale || 1.0;
+        const scale = (50 / maxVal) * userScale;
 
         this.model.elements.forEach(el => {
             const n1 = this.getNode(el.n1); const n2 = this.getNode(el.n2);
@@ -1171,16 +1190,23 @@ const app = {
 
             ctx.fillStyle = color; ctx.strokeStyle = color.replace('0.5', '1.0'); ctx.lineWidth = 1;
 
-            if (this.diagramMode === 'bmd' && load) {
+            if ((this.diagramMode === 'bmd' || this.diagramMode === 'sfd') && load) {
                 const lw = this.getLoadW(load);
                 ctx.beginPath(); ctx.moveTo(s1.x, s1.y);
-                const steps = 20;
+                const steps = 50; // Increased resolution for smooth curves
                 for(let i=0; i<=steps; i++) {
                     const t = i/steps; const L = Math.sqrt(Math.pow(n2.x-n1.x,2) + Math.pow(n2.y-n1.y,2));
                     const xLocal = t * L;
-                    const M_x = -f.M1 + f.V1 * xLocal - (lw.w1 * xLocal * xLocal / 2) - ((lw.w2 - lw.w1) * Math.pow(xLocal, 3) / (6 * L));
-                    const val = M_x * scale; 
-                    ctx.lineTo(s1.x + nx * val, s1.y + ny * val); // Standard positive M plots up
+                    let val = 0;
+                    if (this.diagramMode === 'bmd') {
+                        const M_x = -f.M1 + f.V1 * xLocal - (lw.w1 * xLocal * xLocal / 2) - ((lw.w2 - lw.w1) * Math.pow(xLocal, 3) / (6 * L));
+                        val = M_x * scale; 
+                    } else if (this.diagramMode === 'sfd') {
+                        const V_x = f.V1 - (lw.w1 * xLocal) - ((lw.w2 - lw.w1) * xLocal * xLocal / (2 * L));
+                        val = V_x * scale;
+                    }
+                    // Correct geometric translation along the exact length vector of the element
+                    ctx.lineTo(s1.x + ux * (len * t) + nx * val, s1.y + uy * (len * t) + ny * val);
                 }
                 ctx.lineTo(s2.x, s2.y); ctx.fill(); ctx.stroke();
             } else {
@@ -1607,6 +1633,9 @@ const app = {
         document.getElementById('set-elemlabels').checked = this.settings.showElemLabels;
         document.getElementById('set-warndup').checked = this.settings.warnDuplicateNodes;
         document.getElementById('set-defscale').value = this.settings.deflectionScale;
+        document.getElementById('set-afdscale').value = this.settings.afdScale || 1.0;
+        document.getElementById('set-sfdscale').value = this.settings.sfdScale || 1.0;
+        document.getElementById('set-bmdscale').value = this.settings.bmdScale || 1.0;
         document.getElementById('settings-modal').style.display = 'flex';
     },
 
@@ -1624,6 +1653,9 @@ const app = {
         this.settings.showElemLabels = document.getElementById('set-elemlabels').checked;
         this.settings.warnDuplicateNodes = document.getElementById('set-warndup').checked;
         this.settings.deflectionScale = parseFloat(document.getElementById('set-defscale').value) || 50;
+        this.settings.afdScale = parseFloat(document.getElementById('set-afdscale').value) || 1.0;
+        this.settings.sfdScale = parseFloat(document.getElementById('set-sfdscale').value) || 1.0;
+        this.settings.bmdScale = parseFloat(document.getElementById('set-bmdscale').value) || 1.0;
         
         document.documentElement.setAttribute('data-theme', this.settings.theme);
         this.updateColors();
